@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>AI Multi-Image Fusion — Webhook Client</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .dropzone.dragover { border-color:#8b5cf6; background-color:rgba(139,92,246,.08); }
+  </style>
+</head>
+<body class="bg-gray-900 text-gray-100 min-h-screen">
+  <header class="border-b border-gray-800 bg-gray-900/70 sticky top-0 z-10">
+    <div class="max-w-6xl mx-auto px-6 py-5">
+      <h1 class="text-4xl font-extrabold tracking-tight">
+        <span class="text-purple-400">AI</span> Multi-Image Fusion(Cloud verison)
+      </h1>
+      <p class="text-gray-400 mt-1">Combine multiple images with a text prompt to create something new.</p>
+    </div>
+  </header>
+
+  <main class="max-w-6xl mx-auto px-6 py-8 grid grid-cols-1 lg:grid-cols-2 gap-6">
+    <!-- Left: Inputs -->
+    <section class="space-y-6">
+      <!-- Upload Images card -->
+      <div class="bg-gray-800/60 border border-gray-700 rounded-2xl p-6">
+        <h2 class="text-2xl font-semibold">1. Upload Images</h2>
+        <p class="text-sm text-gray-400 mt-1">Upload <b>2 to 5</b> images (.png, .jpg, .jpeg). Drag & drop supported.</p>
+
+        <label id="dropzone" class="dropzone mt-4 w-full h-44 border-2 border-dashed border-gray-600 rounded-xl flex flex-col items-center justify-center cursor-pointer">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-10 w-10 text-gray-400" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+              d="M3 15a4 4 0 004 4h10a4 4 0 004-4 4 4 0 00-4-4h-1m-4-7l-4 4m0 0l4 4m-4-4h12" />
+          </svg>
+          <div class="mt-2 font-medium text-gray-300">Click to upload or drag</div>
+          <input id="fileInput" class="hidden" type="file" accept=".png,.jpg,.jpeg" multiple />
+        </label>
+
+        <!-- Thumbs -->
+        <div id="thumbs" class="mt-4 grid grid-cols-3 gap-3"></div>
+
+        <div class="mt-3 text-xs text-gray-400">Tip: 檔案會直接以 multipart/form-data 傳到 Webhook（欄位名 <code>files[]</code>）。</div>
+      </div>
+
+      <!-- Prompt card -->
+      <div class="bg-gray-800/60 border border-gray-700 rounded-2xl p-6">
+        <h2 class="text-2xl font-semibold">2. Describe the Fusion</h2>
+        <textarea id="prompt" class="mt-3 w-full h-28 bg-gray-900 border border-gray-700 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-purple-500"
+          placeholder="例如：把第一張的貓與第二張的太空衣融合，在宇宙中漂浮。"></textarea>
+
+        <button id="fuseBtn"
+          class="mt-4 inline-flex items-center gap-2 px-5 py-3 rounded-xl bg-purple-600 hover:bg-purple-500 disabled:opacity-60 disabled:cursor-not-allowed">
+          <span class="text-lg">✨ Fuse Images</span>
+        </button>
+        <span id="status" class="ml-3 text-sm text-gray-400"></span>
+
+        <div class="mt-2 text-xs text-gray-500">
+          送出的欄位：<code>files[]</code>（多檔）、<code>prompt</code>（文字），可依你 n8n 流程改名。
+        </div>
+      </div>
+    </section>
+
+    <!-- Right: Output -->
+    <section class="bg-gray-800/60 border border-gray-700 rounded-2xl p-6 flex flex-col">
+      <h2 class="text-2xl font-semibold">Your fused image will appear here</h2>
+
+      <div id="resultBox"
+           class="mt-4 flex-1 min-h-72 rounded-xl border border-gray-700 bg-gray-900/60
+                  flex items-center justify-center overflow-hidden">
+        <div id="placeholder" class="text-center text-gray-500">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-12 w-12 mx-auto mb-2" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+              d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V7M3 7l9 6 9-6" />
+          </svg>
+          <div>Upload images and provide a prompt to start the AI fusion process.</div>
+        </div>
+        <img id="resultImg" class="hidden max-h-[70vh] object-contain" alt="Fused result" />
+      </div>
+
+      <div class="mt-4 flex items-center gap-3">
+        <a id="downloadLink" class="hidden px-4 py-2 rounded-lg bg-gray-700 hover:bg-gray-600" download="fusion.png">Download</a>
+        <a id="openLink" class="hidden px-4 py-2 rounded-lg bg-gray-700 hover:bg-gray-600" target="_blank" rel="noopener">Open in new tab</a>
+        <span id="meta" class="text-xs text-gray-400"></span>
+      </div>
+
+      <div id="error" class="mt-3 text-sm text-red-400 hidden"></div>
+    </section>
+  </main>
+
+  <script>
+    // ===================== CONFIG =====================
+    const WEBHOOK_URL = "https://n8n-seyuownx.ap-southeast-1.clawcloudrun.com/webhook/0b97db68-c728-4721-af6e-741df9356761"; // ← 換成你的 n8n Webhook
+    // ==================================================
+
+    const dropzone   = document.getElementById('dropzone');
+    const fileInput  = document.getElementById('fileInput');
+    const thumbs     = document.getElementById('thumbs');
+    const promptEl   = document.getElementById('prompt');
+    const fuseBtn    = document.getElementById('fuseBtn');
+    const statusEl   = document.getElementById('status');
+    const resultImg  = document.getElementById('resultImg');
+    const placeholder= document.getElementById('placeholder');
+    const errorEl    = document.getElementById('error');
+    const downloadA  = document.getElementById('downloadLink');
+    const openA      = document.getElementById('openLink');
+    const metaEl     = document.getElementById('meta');
+
+    let files = [];
+
+    // --- Drag & Drop behavior
+    ['dragenter','dragover'].forEach(evt => {
+      dropzone.addEventListener(evt, e => {
+        e.preventDefault(); e.stopPropagation();
+        dropzone.classList.add('dragover');
+      });
+    });
+    ['dragleave','drop'].forEach(evt => {
+      dropzone.addEventListener(evt, e => {
+        e.preventDefault(); e.stopPropagation();
+        dropzone.classList.remove('dragover');
+      });
+    });
+    dropzone.addEventListener('click', () => fileInput.click());
+    dropzone.addEventListener('drop', e => {
+      const list = [...e.dataTransfer.files || []];
+      handleAddFiles(list);
+    });
+    fileInput.addEventListener('change', e => {
+      const list = [...(e.target.files || [])];
+      handleAddFiles(list);
+      e.target.value = "";
+    });
+
+    function handleAddFiles(list) {
+      const allowed = ['image/png','image/jpeg'];
+      const next = [];
+      for (const f of list) {
+        if (!allowed.includes(f.type)) continue;
+        next.push(f);
+      }
+      files = [...files, ...next].slice(0, 5); // keep max 5
+      renderThumbs();
+    }
+
+    function renderThumbs() {
+      thumbs.innerHTML = '';
+      files.forEach((file, idx) => {
+        const url = URL.createObjectURL(file);
+        const wrapper = document.createElement('div');
+        wrapper.className = "relative";
+        wrapper.innerHTML = `
+          <img src="${url}" class="w-full h-24 object-cover rounded-lg border border-gray-700" />
+          <button aria-label="remove" class="absolute -top-2 -right-2 bg-gray-900/80 border border-gray-700 rounded-full w-7 h-7">✕</button>
+        `;
+        wrapper.querySelector('button').addEventListener('click', () => {
+          files.splice(idx,1);
+          renderThumbs();
+        });
+        thumbs.appendChild(wrapper);
+      });
+    }
+
+    function setLoading(isLoading, text='') {
+      fuseBtn.disabled = isLoading;
+      statusEl.textContent = text;
+      errorEl.classList.add('hidden');
+      if (isLoading) {
+        statusEl.classList.remove('text-green-400');
+        statusEl.classList.add('text-gray-300');
+      } else {
+        statusEl.classList.remove('text-gray-300');
+      }
+    }
+
+    function showResultFromUrl(url) {
+      resultImg.src = url;
+      resultImg.classList.remove('hidden');
+      placeholder.classList.add('hidden');
+      downloadA.classList.remove('hidden');
+      openA.classList.remove('hidden');
+      downloadA.href = url;
+      openA.href = url;
+      metaEl.textContent = "來源：URL";
+    }
+
+    function showResultFromBase64(b64, mime="image/png") {
+      const dataUrl = `data:${mime};base64,${b64}`;
+      resultImg.src = dataUrl;
+      resultImg.classList.remove('hidden');
+      placeholder.classList.add('hidden');
+
+      // 也提供下載（轉為 Blob URL）
+      const byteString = atob(b64);
+      const ab = new ArrayBuffer(byteString.length);
+      const ia = new Uint8Array(ab);
+      for (let i=0; i<byteString.length; i++) ia[i] = byteString.charCodeAt(i);
+      const blobUrl = URL.createObjectURL(new Blob([ab], {type: mime}));
+
+      downloadA.classList.remove('hidden');
+      downloadA.href = blobUrl;
+      openA.classList.remove('hidden');
+      openA.href = blobUrl;
+      metaEl.textContent = "來源：Base64";
+    }
+
+    function showResultFromBlob(blob) {
+      const url = URL.createObjectURL(blob);
+      showResultFromUrl(url);
+      metaEl.textContent = `來源：Blob (${blob.type || 'image/*'})`;
+    }
+
+    fuseBtn.addEventListener('click', async () => {
+      if (files.length < 2) {
+        errorEl.textContent = "請至少上傳 2 張圖片（最多 5 張）。";
+        errorEl.classList.remove('hidden');
+        return;
+      }
+      const fd = new FormData();
+      files.forEach(f => fd.append('files[]', f, f.name));
+      fd.append('prompt', promptEl.value || '');
+
+      try {
+        setLoading(true, "Fusing… 這段時間取決於你的 workflow");
+        const res = await fetch(WEBHOOK_URL, {
+          method: 'POST',
+          body: fd,
+        });
+
+        // 嘗試優先解析 JSON
+        const ct = res.headers.get('content-type') || '';
+        if (ct.includes('application/json')) {
+          const data = await res.json();
+          if (data.image_url) {
+            showResultFromUrl(data.image_url);
+          } else if (data.image_base64 || data.data) {
+            const b64 = data.image_base64 || data.data;
+            const mime = data.mime || 'image/png';
+            showResultFromBase64(b64, mime);
+          } else {
+            throw new Error("JSON 內找不到 image_url 或 base64 欄位");
+          }
+        } else if (ct.startsWith('image/')) {
+          // 直接回傳影像
+          const blob = await res.blob();
+          showResultFromBlob(blob);
+        } else {
+          // 非 JSON/影像，最後嘗試 blob
+          const blob = await res.blob();
+          showResultFromBlob(blob);
+        }
+
+        setLoading(false);
+        statusEl.textContent = "完成 ✅";
+        statusEl.classList.add('text-green-400');
+      } catch (err) {
+        console.error(err);
+        setLoading(false);
+        errorEl.textContent = "處理失敗：" + (err?.message || err);
+        errorEl.classList.remove('hidden');
+      }
+    });
+  </script>
+
+  <!-- 小抄：n8n 節點建議
+    - Webhook (POST, Respond immediately: false) 接收 files[] 與 prompt
+    - Move Binary Data / Function: 將多張 images 合併處理；或交給你現有 Base64→壓縮→S3 流程
+    - 最終回傳：
+        a) JSON: { "image_url": "https://..." }
+        b) JSON: { "image_base64": "<base64>", "mime": "image/png" }
+        c) Binary 影像 (Content-Type: image/png/jpeg)
+    - 若遇到 CORS，請在 Webhook Response Header 加：
+        Access-Control-Allow-Origin: *
+        Access-Control-Allow-Headers: *
+  -->
+</body>
+</html>
